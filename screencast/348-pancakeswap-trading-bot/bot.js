@@ -1,99 +1,127 @@
+/* eslint-disable max-len */
 const ethers = require('ethers');
+const config = require('config');
 
-const addresses = {
-  WBNB: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c',
-  factory: '0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73',
-  router: '0x10ED43C718714eb63d5aA57B78B54704E256024E',
-  recipient: 'recipient of the profit here'
-}
+// First address of this mnemonic must have enough BNB to pay for tx fess
+const myGasPrice = ethers.utils.parseUnits('1', 'ether');
+const myGasLimit = {
+  gasPrice: myGasPrice,
+  gasLimit: '162445',
+};
 
-//First address of this mnemonic must have enough BNB to pay for tx fess
-const mnemonic = 'your mnemonic here, to send';
-
-const provider = new ethers.providers.WebSocketProvider('Ankr websocket url to mainnet');
-const wallet = ethers.Wallet.fromMnemonic(mnemonic);
+const provider = new ethers.providers.JsonRpcProvider(config[config.network].node);
+const wallet = new ethers.Wallet(config[config.network].privateKey);
 const account = wallet.connect(provider);
+
 const factory = new ethers.Contract(
-  addresses.factory,
+  config[config.network].addresses.factory,
   ['event PairCreated(address indexed token0, address indexed token1, address pair, uint)'],
-  account
+  account,
 );
 const router = new ethers.Contract(
-  addresses.router,
+  config[config.network].addresses.router,
   [
     'function getAmountsOut(uint amountIn, address[] memory path) public view returns (uint[] memory amounts)',
-    'function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)'
+    'function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)',
   ],
-  account
+  account,
 );
 
 const wbnb = new ethers.Contract(
-  addresses.WBNB,
+  config[config.network].addresses.WBNB,
   [
     'function approve(address spender, uint amount) public returns(bool)',
   ],
-  account
+  account,
 );
 
+console.log('Before Approve');
+const valueToApprove = ethers.utils.parseUnits('0.5', 'ether');
 const init = async () => {
   const tx = await wbnb.approve(
-    router.address, 
-    'replace by amount covering several trades'
+    router.address,
+    valueToApprove,
+    myGasLimit,
   );
-  const receipt = await tx.wait(); 
-  console.log('Transaction receipt');
-  console.log(receipt);
-}
+  console.log('After Approve');
+  const receipt = await tx.wait();
+  console.log('Transaction receipt', receipt);
+};
+
 
 factory.on('PairCreated', async (token0, token1, pairAddress) => {
-  console.log(`
-    New pair detected
-    =================
-    token0: ${token0}
-    token1: ${token1}
-    pairAddress: ${pairAddress}
-  `);
+  console.log(`New pair detected ================= token0: ${token0} token1: ${token1} pairAddress: ${pairAddress}`);
 
-  //The quote currency needs to be WBNB (we will pay with WBNB)
-  let tokenIn, tokenOut;
-  if(token0 === addresses.WBNB) {
-    tokenIn = token0; 
+  // The quote currency needs to be WBNB (we will pay with WBNB)
+  let tokenIn;
+  let tokenOut;
+  if (token0 === config[config.network].addresses.WBNB) {
+    tokenIn = token0;
     tokenOut = token1;
   }
 
-  if(token1 == addresses.WBNB) {
-    tokenIn = token1; 
+  if (token1 === config[config.network].addresses.WBNB) {
+    tokenIn = token1;
     tokenOut = token0;
   }
 
-  //The quote currency is not WBNB
-  if(typeof tokenIn === 'undefined') {
+  // // The quote currency is not WBNB
+  if (typeof tokenIn === 'undefined') {
     return;
   }
 
-  //We buy for 0.1 BNB of the new token
-  //ethers was originally created for Ethereum, both also work for BSC
-  //'ether' === 'bnb' on BSC
-  const amountIn = ethers.utils.parseUnits('0.1', 'ether');
+  // We buy for 0.1 BNB of the new token
+  // ethers was originally created for Ethereum, both also work for BSC
+  // 'ether' === 'bnb' on BSC
+  const amountIn = ethers.utils.parseUnits('1', 'ether');
   const amounts = await router.getAmountsOut(amountIn, [tokenIn, tokenOut]);
-  //Our execution price will be a bit different, we need some flexbility
+  // Our execution price will be a bit different, we need some flexbility
   const amountOutMin = amounts[1].sub(amounts[1].div(10));
-  console.log(`
-    Buying new token
-    =================
-    tokenIn: ${amountIn.toString()} ${tokenIn} (WBNB)
-    tokenOut: ${amounOutMin.toString()} ${tokenOut}
-  `);
+
+  console.log(`Buying new token ================= tokenIn: ${amountIn} `
+  + `${tokenIn} (WBNB) tokenOut: ${amountOutMin} ${tokenOut}`);
+
   const tx = await router.swapExactTokensForTokens(
     amountIn,
     amountOutMin,
     [tokenIn, tokenOut],
-    addresses.recipient,
-    Date.now() + 1000 * 60 * 10 //10 minutes
+    config[config.network].addresses.recipient,
+    Math.floor(Date.now() / 1000) + 60 * 30, // 1 minutes from the current Unix time
+    myGasLimit,
   );
-  const receipt = await tx.wait(); 
-  console.log('Transaction receipt');
-  console.log(receipt);
+  const receipt = await tx.wait();
+  console.log('Transaction receipt', receipt);
 });
 
-init();
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+});
+
+process.on('unhandledRejection', (reason, p) => {
+  console.error('Unhandled Rejection', {
+    unhandledRejection: p,
+    reason,
+  });
+});
+
+const buy = async () => {
+  await init();
+
+
+  const amountIn = ethers.utils.parseUnits('1', 'ether');
+  const tx = await router.swapExactTokensForTokens(
+    amountIn,
+    0,
+    [config[config.network].addresses.CAKE, config[config.network].addresses.WBNB],
+    config[config.network].addresses.recipient,
+    Math.floor(Date.now() / 1000) + 60 * 30, // 30 minutes from the current Unix time
+    myGasLimit,
+  );
+  const receipt = await tx.wait();
+  console.log('Transaction receipt');
+  console.log(receipt);
+};
+
+// init();
+buy();
